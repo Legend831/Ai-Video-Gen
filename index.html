@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0e0f12">
+<title>Free Video Studio</title>
+<style>
+  /* Layout: single column, prompt on top, result below, settings in a drawer */
+  :root {
+    --bg: #0e0f12; --panel: #181a20; --line: #2a2d36; --fg: #f1f2f4; --muted: #8b90a0;
+    --accent: #ff5a36; --accent-fg: #0e0f12; --err: #ff7b7b;
+    --display: "Bricolage Grotesque", system-ui, sans-serif;
+    --body: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg); color: var(--fg); font: 16px/1.5 var(--body);
+    padding-block: max(20px, env(safe-area-inset-top, 0px)) max(32px, env(safe-area-inset-bottom, 0px));
+    padding-inline: max(16px, env(safe-area-inset-left, 0px)) max(16px, env(safe-area-inset-right, 0px));
+  }
+  main { max-width: 640px; margin: 0 auto; display: grid; gap: 16px; }
+  header { display: flex; justify-content: space-between; align-items: center; }
+  h1 { font: 700 1.6rem/1.1 var(--display); margin: 0; letter-spacing: -0.02em; text-wrap: balance; }
+  button, textarea, input { font: inherit; color: inherit; }
+  textarea, input {
+    width: 100%; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 12px 14px;
+  }
+  textarea { min-height: 120px; resize: vertical; }
+  textarea:focus-visible, input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .primary {
+    background: var(--accent); color: var(--accent-fg); border: 0; border-radius: 12px;
+    padding: 14px; font-weight: 700; width: 100%; cursor: pointer;
+  }
+  .primary:disabled { opacity: .5; cursor: progress; }
+  .ghost { background: none; border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; cursor: pointer; }
+  .chips { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; }
+  .chip { flex: none; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; font-size: .85rem; cursor: pointer; }
+  video { width: 100%; border-radius: 14px; background: #000; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .row > * { flex: 1 1 140px; text-align: center; text-decoration: none; }
+  .status { color: var(--muted); font-size: .9rem; min-height: 1.4em; }
+  .error { color: var(--err); font-size: .9rem; }
+  dialog { background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 16px; width: min(92vw, 560px); padding: 18px; }
+  dialog::backdrop { background: rgba(0,0,0,.6); }
+  dialog label { display: grid; gap: 6px; margin-bottom: 14px; font-size: .85rem; color: var(--muted); }
+  dialog textarea { min-height: 70px; font-family: var(--mono); font-size: .85rem; }
+  small { color: var(--muted); }
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@700&display=swap">
+</head>
+<body>
+<main>
+  <header>
+    <h1>Free Video Studio</h1>
+    <button class="ghost" id="openSettings" aria-label="Settings">Settings</button>
+  </header>
+
+  <textarea id="prompt" placeholder="Describe your video…"></textarea>
+  <div class="chips" id="chips"></div>
+  <button class="primary" id="go">Generate video</button>
+  <div class="status" id="status" aria-live="polite"></div>
+  <div class="error" id="error" role="alert"></div>
+
+  <section id="result" hidden>
+    <video id="player" controls playsinline loop></video>
+    <div class="row" style="margin-top:12px">
+      <a class="ghost" id="download" download="video.mp4">Download</a>
+    </div>
+  </section>
+
+  <small>Runs free open-source models on Hugging Face Spaces. Expect queues, short clips and lower quality than paid tools.</small>
+</main>
+
+<dialog id="settings">
+  <form method="dialog" id="settingsForm">
+    <label>Space URL
+      <input id="host" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://owner-space.hf.space">
+    </label>
+    <label>API name
+      <input id="api" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="generate_video">
+    </label>
+    <label>Parameters (JSON array, {{prompt}} is replaced)
+      <textarea id="tpl" autocapitalize="off" spellcheck="false"></textarea>
+    </label>
+    <label>Hugging Face token (optional, gives more free GPU time)
+      <input id="token" type="password" autocomplete="off" placeholder="hf_…">
+    </label>
+    <small>Find the API name and parameter order on any text-to-video Space: tap "Use via API" in its footer. The default Space is unverified and may be renamed or paused.</small>
+    <div class="row" style="margin-top:14px">
+      <button class="ghost" value="cancel">Cancel</button>
+      <button class="primary" value="save" id="save">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+const DEFAULTS = {
+  host: "https://zerogpu-aoti-wan2-2-fp8da-aoti.hf.space",
+  api: "generate_video",
+  tpl: '["{{prompt}}"]',
+  token: ""
+};
+const IDEAS = [
+  "Cinematic product reveal of a sneaker on wet asphalt, neon lights",
+  "A golden retriever surfing a huge wave at sunset, slow motion",
+  "Drone shot through a misty pine forest at sunrise",
+  "Cyberpunk street market in the rain, handheld camera"
+];
+const $ = id => document.getElementById(id);
+
+function load() {
+  try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem("fvs") || "{}") }; }
+  catch { return { ...DEFAULTS }; }
+}
+function store(v) { try { localStorage.setItem("fvs", JSON.stringify(v)); } catch {} }
+let cfg = load();
+
+IDEAS.forEach(t => {
+  const b = document.createElement("button");
+  b.className = "chip"; b.textContent = t;
+  b.onclick = () => { $("prompt").value = t; };
+  $("chips").appendChild(b);
+});
+
+$("openSettings").onclick = () => {
+  $("host").value = cfg.host; $("api").value = cfg.api; $("tpl").value = cfg.tpl; $("token").value = cfg.token;
+  $("settings").showModal();
+};
+$("settingsForm").addEventListener("submit", e => {
+  if (e.submitter && e.submitter.value === "save") {
+    cfg = { host: $("host").value.trim(), api: $("api").value.trim(), tpl: $("tpl").value, token: $("token").value.trim() };
+    store(cfg);
+  }
+});
+
+function findFile(node, base) {
+  if (!node || typeof node !== "object") return null;
+  if (typeof node.url === "string") return node.url;
+  if (typeof node.path === "string") return `${base}/gradio_api/file=${node.path}`;
+  for (const v of Object.values(node)) { const f = findFile(v, base); if (f) return f; }
+  return null;
+}
+
+async function generate(prompt) {
+  const base = cfg.host.replace(/\/+$/, "");
+  const api = cfg.api.replace(/^\/+|\s+/g, "");
+  const filled = cfg.tpl.replace(/\{\{prompt\}\}/g, JSON.stringify(prompt).slice(1, -1));
+  let data;
+  try { data = JSON.parse(filled); if (!Array.isArray(data)) throw 0; }
+  catch { throw new Error("Parameters must be a valid JSON array."); }
+  const headers = { "Content-Type": "application/json" };
+  if (cfg.token) headers.Authorization = "Bearer " + cfg.token;
+
+  const post = await fetch(`${base}/gradio_api/call/${api}`, { method: "POST", headers, body: JSON.stringify({ data }) });
+  if (!post.ok) throw new Error(`Space returned ${post.status}. Check the URL and API name in Settings.`);
+  const { event_id } = await post.json();
+
+  const res = await fetch(`${base}/gradio_api/call/${api}/${event_id}`, { headers: cfg.token ? { Authorization: headers.Authorization } : {} });
+  if (!res.ok || !res.body) throw new Error(`Result stream failed (${res.status}).`);
+  const reader = res.body.getReader(); const dec = new TextDecoder();
+  let buf = "", ev = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const lines = buf.split("\n"); buf = lines.pop();
+    for (const line of lines) {
+      if (line.startsWith("event:")) ev = line.slice(6).trim();
+      else if (line.startsWith("data:")) {
+        const payload = line.slice(5).trim();
+        if (ev === "error") throw new Error(payload === "null" ? "The Space hit an error, usually a quota or queue limit. Try again later or add a Hugging Face token in Settings." : payload);
+        if (ev === "complete") {
+          const url = findFile(JSON.parse(payload), base);
+          if (!url) throw new Error("The Space finished but returned no video.");
+          return url;
+        }
+      }
+    }
+  }
+  throw new Error("The Space closed the connection before finishing.");
+}
+
+$("go").onclick = async () => {
+  const prompt = $("prompt").value.trim();
+  if (!prompt) return;
+  $("error").textContent = ""; $("result").hidden = true;
+  $("go").disabled = true; $("go").textContent = "Generating…";
+  $("status").textContent = "Queued on a free GPU. This can take 1 to 3 minutes.";
+  try {
+    const url = await generate(prompt);
+    $("player").src = url; $("download").href = url;
+    $("result").hidden = false; $("status").textContent = "";
+    $("player").play().catch(() => {});
+  } catch (e) {
+    $("status").textContent = "";
+    $("error").textContent = (e instanceof TypeError)
+      ? "Couldn't reach the Space. It may be paused, renamed, or blocking browser requests. Check Settings."
+      : e.message;
+  } finally {
+    $("go").disabled = false; $("go").textContent = "Generate video";
+  }
+};
+</script>
+</body>
+</html>
